@@ -1,0 +1,229 @@
+{
+  "name": "Jira AI Test Case Agent",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "9176e105-5fc7-48e7-b5b0-ffd1a31d50d7",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        288,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ticket-id-field",
+              "name": "ticketId",
+              "value": "SCRUM-6",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "6ca60ecd-ae24-4062-a91e-3a4ce07fc8bc",
+      "name": "Set Ticket ID",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        512,
+        -80
+      ],
+      "notes": "Change 'PROJ-123' to the real Jira ticket ID you want to test, or replace this node with a Form/Webhook trigger to pass it in dynamically."
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "issueKey": "={{ $json.ticketId }}",
+        "additionalFields": {}
+      },
+      "id": "94b86f1d-2d33-4141-8abf-20f029c2d219",
+      "name": "Get Jira Ticket",
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [
+        736,
+        -80
+      ],
+      "credentials": {
+        "jiraSoftwareCloudApi": {
+          "id": "tQPnf4nB5ICAGIlu",
+          "name": "Jira SW Cloud account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Jira Cloud stores description as Atlassian Document Format (ADF).\n// This extracts plain text from it so the AI prompt gets clean text.\nfunction extractText(node) {\n  if (!node) return '';\n  if (typeof node === 'string') return node;\n  let text = '';\n  if (node.type === 'text') {\n    text += node.text || '';\n  }\n  if (Array.isArray(node.content)) {\n    for (const child of node.content) {\n      text += extractText(child) + ' ';\n    }\n  }\n  return text;\n}\n\n// New: escapes newlines/quotes/backslashes so this text is safe to drop into JSON later\nfunction sanitize(str) {\n  if (!str) return '';\n  return str\n    .replace(/\\\\/g, '\\\\\\\\')\n    .replace(/\\r?\\n/g, '\\\\n')\n    .replace(/\"/g, '\\\\\"');\n}\n\nconst fields = $input.first().json.fields;\nconst summary = sanitize(fields.summary || '');\nconst description = sanitize(extractText(fields.description).trim() || '(no description provided)');\nconst ticketKey = $input.first().json.key;\n\nreturn [{ json: { ticketKey, summary, description } }];"
+      },
+      "id": "ab07fa3e-e02a-4b3b-a5c6-1240a5463e62",
+      "name": "Extract Ticket Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"contents\": [\n    {\n      \"parts\": [\n        {\n          \"text\": \"You are a senior QA engineer reviewing a Jira ticket.\\n\\nTicket ID: {{ $json.ticketKey }}\\nSummary: {{ $json.summary }}\\nDescription: {{ $json.description }}\\n\\nGenerate a thorough set of test cases for this ticket.\\nOutput as a markdown table with columns: ID | Title | Steps | Expected Result.\\nInclude positive, negative, and edge cases (at least 8 test cases total).\\nBe specific -- refer to actual fields/actions mentioned in the ticket, don't be generic.\"\n        }\n      ]\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "e2f162b3-1efa-44bc-867e-7e0a73abb6e0",
+      "name": "Generate Test Cases (Claude)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1168,
+        -80
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "mguXv3s3uoiVDe4H",
+          "name": "Header Auth account"
+        }
+      },
+      "notes": "Header auth credential should set header name 'x-api-key' with your Anthropic API key as the value."
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json; const testCases = response.candidates[0].content.parts[0].text; return [{ json: { testCases } }]"
+      },
+      "id": "e35a783b-3045-4762-9117-1323ead8bd4b",
+      "name": "Parse Claude Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1392,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "issueComment",
+        "issueKey": "={{ $('Extract Ticket Text').item.json.ticketKey }}",
+        "comment": "={{ 'AI-generated test cases:\\n\\n' + $json.testCases }}",
+        "options": {}
+      },
+      "id": "1e31c488-a7e5-4cfb-9e36-1c93061ebabe",
+      "name": "Post Comment to Jira",
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [
+        1616,
+        -80
+      ],
+      "credentials": {
+        "jiraSoftwareCloudApi": {
+          "id": "tQPnf4nB5ICAGIlu",
+          "name": "Jira SW Cloud account"
+        }
+      },
+      "notes": "Optional: instead of posting back to Jira, you could swap this for a Google Sheets, Slack, or Email node."
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set Ticket ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Ticket ID": {
+      "main": [
+        [
+          {
+            "node": "Get Jira Ticket",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Jira Ticket": {
+      "main": [
+        [
+          {
+            "node": "Extract Ticket Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Ticket Text": {
+      "main": [
+        [
+          {
+            "node": "Generate Test Cases (Claude)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Test Cases (Claude)": {
+      "main": [
+        [
+          {
+            "node": "Parse Claude Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Claude Response": {
+      "main": [
+        [
+          {
+            "node": "Post Comment to Jira",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "18a8767e-88b2-47fb-bcf1-2f25c69a505d",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "0136803afd9cb1015ba100881342a96be0a2bc209a381c44fb3bbe8ed0fb0191"
+  },
+  "nodeGroups": [],
+  "id": "cdkIFO0CE6MMIDv8",
+  "tags": []
+}
